@@ -1,0 +1,53 @@
+{
+  "summary": "End-to-end testing of Lunatick Community (FastAPI + React + MongoDB + WebSocket chat). 22/24 backend tests passing. All major frontend flows (landing, register, login as admin, post create on feed and on board, reactions, post detail + comments, chat WS realtime + history persistence after refresh, presence, profile settings) verified working.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/auth/login",
+        "issue": "Brute-force lockout does NOT trigger in this preview environment. The login attempt identifier is built from `request.client.host`, but behind the k8s ingress the upstream client IP varies between multiple proxy IPs (observed `10.169.1.135` and `10.169.3.66` during 6 attempts), so the 5-attempt counter is split across multiple identifier rows and `locked_until` is never set. Result: 6 wrong-password attempts all returned HTTP 401, none returned 429. Fix: use the leftmost X-Forwarded-For (or trusted X-Real-IP) header instead of `request.client.host`, or key the lockout on email only.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/auth/login",
+        "issue": "Occasional HTTP 500 when 5+ rapid wrong-password attempts arrive concurrently (likely racy upsert in `login_attempts`). Observed once in 7 curls."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix rate-limit identifier in /api/auth/login to use X-Forwarded-For (or trusted real-IP header) instead of request.client.host so the 5-attempt brute-force lockout actually fires behind the ingress.",
+    "Handle race condition on login_attempts upsert (the rare 500 on rapid wrong-password attempts).",
+    "Optional: Add a /api/posts viewer authentication path that doesn't rely on `request: Request = None` default — currently safe, but cleaner with `Request` non-optional."
+  ],
+  "critical_code_review_comments": [
+    "Auth: bcrypt hashing OK ($2b$ format), httpOnly+Secure+SameSite=None cookies set on login/register, seed_admin updates password if env changed, Bearer fallback honored — matches playbook.",
+    "Rate-limit: identifier should be derived from a trusted forwarded-for header behind ingress; current implementation effectively disables the brute-force lockout in this deployment (HIGH).",
+    "MongoDB ObjectId: properly excluded via custom serializers; no `_id` leaks in API responses.",
+    "WebSocket: token-based auth, presence broadcast on connect/disconnect, ping/pong, message persistence and broadcast all verified working end-to-end.",
+    "CORS allow_origins='*' combined with allow_credentials=True is invalid per spec; many browsers will reject credentials. Recommend setting explicit origin(s) via CORS_ORIGINS env in production.",
+    "server.py is ~655 lines and growing — consider splitting into routers (auth/posts/comments/chat) for maintainability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {
+    "backend": "92% (22/24 pytest)",
+    "frontend": "100% of tested flows"
+  },
+  "test_credentials": "admin@lunatick.app / luna123 (verified). New users created dynamically with TEST_ prefix.",
+  "seed_data_creation": "Test posts/comments/chat messages prefixed with 'TEST_' created during test run; not cleaned up (no admin-only purge endpoint).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/backend_test.py covers auth, boards, posts, comments, reactions, reports, profile, block, chat history, and WebSocket (presence + message + ping/pong + invalid-token close). The brute-force lockout test is expected to fail until the IP-detection bug is fixed; everything else should be green. Frontend testids in App.js match the request — landing/register/login/feed/boards/board view/post detail/chat/settings all rendered and integrated correctly.",
+  "rca_of_the_issue": "Brute-force lockout failure RCA: `app/backend/server.py` line ~213 builds `identifier = f\"{ip}:{email}\"` using `request.client.host`. In the k8s preview deployment, requests are proxied through multiple ingress nodes, each presenting its own upstream IP to FastAPI. Pymongo logs show two distinct identifiers being created for the same email (`10.169.1.135:...` count=4 and `10.169.3.66:...` count=2) after 6 attempts — neither reaches the 5-attempt threshold to set `locked_until`, so the 429 branch never fires. Mitigation: read `request.headers.get('x-forwarded-for', request.client.host).split(',')[0].strip()`, or simply key the lockout on email alone (acceptable for this use case)."
+}
