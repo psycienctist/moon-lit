@@ -42,6 +42,11 @@ app.add_middleware(
 def now_utc():
     return datetime.now(timezone.utc)
 
+def _aware(dt):
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
 def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
@@ -209,25 +214,44 @@ async def register(body: RegisterReq, response: Response):
 @app.post("/api/auth/login")
 async def login(body: LoginReq, request: Request, response: Response):
     email = body.email.lower()
-    ip = request.client.host if request.client else "unknown"
+    fwd = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+    if fwd:
+        ip = fwd.split(",")[0].strip()
+    else:
+        ip = request.client.host if request.client else "unknown"
     identifier = f"{ip}:{email}"
 
     attempt = await db.login_attempts.find_one({"identifier": identifier})
-    if attempt and attempt.get("locked_until") and attempt["locked_until"] > now_utc():
+    if attempt and _aware(attempt.get("locked_until")) and _aware(attempt["locked_until"]) > now_utc():
+        raise HTTPException(429, "Too many attempts. Try again later.")
+    # Also enforce email-only lockout to be resilient to multi-IP ingress
+    email_attempt = await db.login_attempts.find_one({"identifier": f"email:{email}"})
+    if email_attempt and _aware(email_attempt.get("locked_until")) and _aware(email_attempt["locked_until"]) > now_utc():
         raise HTTPException(429, "Too many attempts. Try again later.")
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
-        new_count = (attempt.get("count", 0) if attempt else 0) + 1
-        lock_until = now_utc() + timedelta(minutes=15) if new_count >= 5 else None
-        await db.login_attempts.update_one(
-            {"identifier": identifier},
-            {"$set": {"count": new_count, "locked_until": lock_until, "updated_at": now_utc()}},
-            upsert=True,
-        )
+        try:
+            new_count = (attempt.get("count", 0) if attempt else 0) + 1
+            lock_until = now_utc() + timedelta(minutes=15) if new_count >= 5 else None
+            await db.login_attempts.update_one(
+                {"identifier": identifier},
+                {"$set": {"count": new_count, "locked_until": lock_until, "updated_at": now_utc()}},
+                upsert=True,
+            )
+            # email-scoped counter (so multi-IP ingress still gets locked)
+            e_count = (email_attempt.get("count", 0) if email_attempt else 0) + 1
+            e_lock = now_utc() + timedelta(minutes=15) if e_count >= 5 else None
+            await db.login_attempts.update_one(
+                {"identifier": f"email:{email}"},
+                {"$set": {"count": e_count, "locked_until": e_lock, "updated_at": now_utc()}},
+                upsert=True,
+            )
+        except Exception:
+            pass
         raise HTTPException(401, "Invalid email or password")
 
-    await db.login_attempts.delete_one({"identifier": identifier})
+    await db.login_attempts.delete_many({"identifier": {"$in": [identifier, f"email:{email}"]}})
     uid = str(user["_id"])
     access = create_access_token(uid, email)
     refresh = create_refresh_token(uid)
