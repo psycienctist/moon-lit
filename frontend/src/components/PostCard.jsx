@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api, formatApiError } from '../lib/api';
 import Avatar from './Avatar';
 import TimeAgo from './TimeAgo';
+import CosmicCard from './CosmicCard';
 import { useAuth } from '../lib/auth';
 import { Link, useNavigate } from 'react-router-dom';
 import { MessageSquare, Flag, Trash2 } from 'lucide-react';
@@ -78,6 +79,11 @@ export default function PostCard({ post, onChange, onDelete, compact = false }) 
               {post.title}
             </h3>
           </Link>
+          {post.kind === 'cosmic_card' && post.cosmic_data && (
+            <div className="mt-3">
+              <CosmicCard data={post.cosmic_data} compact={compact} />
+            </div>
+          )}
           {!compact && (
             <p className="text-cosmos-glow/80 mt-2 leading-relaxed whitespace-pre-wrap line-clamp-5" data-testid="post-content">
               {post.content}

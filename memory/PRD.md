@@ -42,12 +42,20 @@
 - ✅ Toggleable emoji reactions per post
 - ✅ Comments: create, list, delete (author/admin)
 - ✅ Reports: POST endpoint + admin list
-- ✅ User profile GET + PUT (username uniqueness, bio, avatar URL)
+- ✅ User profile GET + PUT (username uniqueness, bio, avatar URL, birth_date)
 - ✅ Block/unblock endpoints (filters posts feed)
 - ✅ WebSocket chat: JWT auth, broadcast, presence list, ping/pong heartbeat, MongoDB persistence
 - ✅ REST `/api/chat/history` for cold loads
 - ✅ Frontend: Landing, Login, Register, Feed, Boards, BoardView, PostDetail, Chat, Profile, Settings, themed Header with user dropdown
 - ✅ data-testids across all critical UI
+
+## Implemented (2026-06-05) — Cosmic Card share
+- ✅ Backend: `ephem`-powered natal chart computation (`GET /api/cosmic/me`, `POST /api/cosmic/share`)
+- ✅ Posts can now have `kind="cosmic_card"` with embedded structured `cosmic_data`
+- ✅ Frontend: `<CosmicCard>` renders a rich card with sun/moon signs, birth phase, full-moons-lived counter, current phase/glow/age, moon-vibe text, personal aspect guidance, and live next-full-moon countdown
+- ✅ "Share my Cosmic Card" CTA on Feed, with modal preview + optional note + board target
+- ✅ Birth date editable in Settings (unlocks natal half of the card)
+- ✅ Auth model switched to Bearer-token-in-localStorage (platform edge proxy injects `ACAO: *` which precludes credentialed cookies cross-origin)
 
 ## Test results
 - Backend: 22/24 → 24/24 after HIGH priority brute-force fix

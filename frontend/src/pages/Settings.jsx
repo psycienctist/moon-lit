@@ -10,6 +10,7 @@ export default function Settings() {
   const [username, setUsername] = useState(user?.username || '');
   const [bio, setBio] = useState(user?.bio || '');
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || '');
+  const [birthDate, setBirthDate] = useState(user?.birth_date || '');
   const [error, setError] = useState('');
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -23,6 +24,7 @@ export default function Settings() {
         username: username.trim(),
         bio,
         avatar_url: avatarUrl.trim() || null,
+        birth_date: birthDate || '',
       });
       setUserData(data);
       setOk(true);
@@ -64,6 +66,17 @@ export default function Settings() {
             maxLength={280} rows={3}
             className="cosmic-input resize-none"
             data-testid="settings-bio-input"
+          />
+        </div>
+        <div>
+          <label className="label-mono block mb-2">Birth date <span className="text-cosmos-mist normal-case tracking-normal">(unlocks your full natal chart on Cosmic Card)</span></label>
+          <input
+            type="date"
+            value={birthDate}
+            onChange={(e) => setBirthDate(e.target.value)}
+            max={new Date().toISOString().slice(0, 10)}
+            className="cosmic-input"
+            data-testid="settings-birthdate-input"
           />
         </div>
         {error && <div className="text-cosmos-ember text-sm">{error}</div>}

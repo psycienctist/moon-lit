@@ -4,12 +4,14 @@ load_dotenv()
 
 import os
 import secrets
+import math
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from typing import Optional, List, Annotated, Literal
 
 import bcrypt
 import jwt
+import ephem
 from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Request, Response, Depends, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,14 +31,23 @@ db = mongo[DB_NAME]
 
 app = FastAPI(title="Lunatick Community API")
 
-cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
+if cors_origins_env.strip() == "*":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in cors_origins_env.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # -------------------------- HELPERS --------------------------
 def now_utc():
@@ -80,6 +91,7 @@ def serialize_user(u: dict) -> dict:
         "bio": u.get("bio", ""),
         "role": u.get("role", "user"),
         "blocked_users": [str(x) for x in u.get("blocked_users", [])],
+        "birth_date": u.get("birth_date"),  # ISO date string YYYY-MM-DD or None
         "created_at": u.get("created_at", now_utc()).isoformat() if isinstance(u.get("created_at"), datetime) else u.get("created_at"),
     }
 
@@ -126,6 +138,7 @@ class UpdateProfileReq(BaseModel):
     username: Optional[str] = Field(default=None, min_length=3, max_length=24)
     bio: Optional[str] = Field(default=None, max_length=280)
     avatar_url: Optional[str] = None
+    birth_date: Optional[str] = None  # "YYYY-MM-DD" or "" to clear
 
 class CreatePostReq(BaseModel):
     title: str = Field(min_length=1, max_length=200)
@@ -297,6 +310,15 @@ async def update_me(body: UpdateProfileReq, user: dict = Depends(get_current_use
         updates["bio"] = body.bio
     if body.avatar_url is not None:
         updates["avatar_url"] = body.avatar_url
+    if body.birth_date is not None:
+        if body.birth_date == "":
+            updates["birth_date"] = None
+        else:
+            try:
+                date.fromisoformat(body.birth_date)
+            except ValueError:
+                raise HTTPException(400, "birth_date must be YYYY-MM-DD")
+            updates["birth_date"] = body.birth_date
     if updates:
         await db.users.update_one({"_id": user["_id"]}, {"$set": updates})
     fresh = await db.users.find_one({"_id": user["_id"]})
@@ -358,6 +380,8 @@ async def hydrate_post(p: dict, viewer: Optional[dict] = None) -> dict:
         "title": p["title"],
         "content": p["content"],
         "board_slug": p.get("board_slug"),
+        "kind": p.get("kind", "text"),
+        "cosmic_data": p.get("cosmic_data"),
         "author": author_view,
         "reactions": react_counts,
         "my_reactions": my_react,
@@ -671,6 +695,161 @@ async def ws_chat(websocket: WebSocket, token: str = Query(...)):
     finally:
         chat.disconnect(ws_id)
         await chat.broadcast_presence()
+
+# -------------------------- COSMIC CARD --------------------------
+ZODIAC_SIGNS = [
+    ("Aries", "♈", "Bold, assertive energy. Great for starting new projects."),
+    ("Taurus", "♉", "Grounded, sensual vibes. Focus on comfort and stability."),
+    ("Gemini", "♊", "Curious, communicative mood. Ideal for learning and socialising."),
+    ("Cancer", "♋", "Nurturing, emotional depth. Prioritise home and family."),
+    ("Leo", "♌", "Creative, warm-hearted energy. Shine and express yourself."),
+    ("Virgo", "♍", "Analytical, detail-oriented. Perfect for organising and health."),
+    ("Libra", "♎", "Harmonious, balanced mood. Focus on relationships and beauty."),
+    ("Scorpio", "♏", "Intense, transformative energy. Dive deep within."),
+    ("Sagittarius", "♐", "Adventurous, optimistic vibes. Seek truth and explore."),
+    ("Capricorn", "♑", "Disciplined, ambitious. Build towards long-term goals."),
+    ("Aquarius", "♒", "Innovative, humanitarian energy. Think outside the box."),
+    ("Pisces", "♓", "Dreamy, intuitive mood. Meditate and create art."),
+]
+
+def _zodiac(lon_deg: float):
+    idx = int(lon_deg / 30) % 12
+    return ZODIAC_SIGNS[idx]
+
+def _moon_phase_name(frac: float):
+    phases = [
+        (0.00, "New Moon", "🌑"), (0.07, "Waxing Crescent", "🌒"), (0.25, "First Quarter", "🌓"),
+        (0.43, "Waxing Gibbous", "🌔"), (0.50, "Full Moon", "🌕"), (0.57, "Waning Gibbous", "🌖"),
+        (0.75, "Last Quarter", "🌗"), (0.93, "Waning Crescent", "🌘"), (1.00, "New Moon", "🌑"),
+    ]
+    for i in range(len(phases) - 1):
+        if phases[i][0] <= frac < phases[i + 1][0]:
+            return phases[i][1], phases[i][2]
+    return "New Moon", "🌑"
+
+def _chart(dt_utc: datetime) -> dict:
+    obs = ephem.Observer()
+    obs.lat, obs.lon = "0", "0"
+    obs.date = ephem.Date(dt_utc)
+    moon = ephem.Moon(obs)
+    sun = ephem.Sun(obs)
+    illum = moon.phase / 100.0
+    elong = float(moon.elong)
+    if elong < 0:
+        elong += 2 * math.pi
+    phase_frac = elong / (2 * math.pi)
+    phase_name, phase_emoji = _moon_phase_name(phase_frac)
+    moon_lon = math.degrees(float(ephem.Ecliptic(moon).lon)) % 360
+    sun_lon = math.degrees(float(ephem.Ecliptic(sun).lon)) % 360
+    moon_sign, moon_symbol, moon_vibe = _zodiac(moon_lon)
+    sun_sign, sun_symbol, _ = _zodiac(sun_lon)
+    next_full = ephem.next_full_moon(obs.date).datetime().replace(tzinfo=timezone.utc)
+    return {
+        "moon_sign": moon_sign, "moon_symbol": moon_symbol, "moon_vibe": moon_vibe, "moon_lon": moon_lon,
+        "sun_sign": sun_sign, "sun_symbol": sun_symbol,
+        "phase_frac": phase_frac, "phase_name": phase_name, "phase_emoji": phase_emoji,
+        "illum": illum,
+        "next_full_dt": next_full,
+        "age_days": phase_frac * 29.53,
+    }
+
+def _aspect(natal_moon_lon: float, current_moon_lon: float):
+    diff = (current_moon_lon - natal_moon_lon) % 360
+    if diff < 10 or diff > 350:
+        return "Lunar Return", "High intuition today. Your birth rhythm is peaking."
+    if 170 < diff < 190:
+        return "Opposition", "Emotions might feel like a tug-of-war. Balance yourself."
+    if 80 < diff < 100 or 260 < diff < 280:
+        return "Square", "Tension in the air. The universe is pushing you to grow."
+    if 110 < diff < 130 or 230 < diff < 250:
+        return "Trine", "Harmony! Today's cosmic tide flows perfectly with you."
+    return "Cycle", "Steady growth. Build on the intentions you set recently."
+
+def _build_cosmic_snapshot(user: dict) -> dict:
+    now_dt = now_utc()
+    current = _chart(now_dt)
+    snapshot = {
+        "now": {
+            "phase_name": current["phase_name"],
+            "phase_emoji": current["phase_emoji"],
+            "illum_pct": round(current["illum"] * 100, 1),
+            "age_days": round(current["age_days"], 1),
+            "moon_sign": current["moon_sign"],
+            "moon_symbol": current["moon_symbol"],
+            "moon_vibe": current["moon_vibe"],
+            "sun_sign": current["sun_sign"],
+            "sun_symbol": current["sun_symbol"],
+            "next_full_iso": current["next_full_dt"].isoformat(),
+        }
+    }
+    bd = user.get("birth_date")
+    if bd:
+        try:
+            bd_dt = datetime.combine(date.fromisoformat(bd), datetime.min.time()).replace(tzinfo=timezone.utc)
+            natal = _chart(bd_dt)
+            aspect, guidance = _aspect(natal["moon_lon"], current["moon_lon"])
+            total_moons = (now_dt - bd_dt).days / 29.53
+            snapshot["natal"] = {
+                "birth_date": bd,
+                "sun_sign": natal["sun_sign"],
+                "sun_symbol": natal["sun_symbol"],
+                "moon_sign": natal["moon_sign"],
+                "moon_symbol": natal["moon_symbol"],
+                "birth_phase_name": natal["phase_name"],
+                "birth_phase_emoji": natal["phase_emoji"],
+                "total_full_moons_lived": int(total_moons),
+                "aspect": aspect,
+                "guidance": guidance,
+            }
+        except Exception:
+            pass
+    return snapshot
+
+@app.get("/api/cosmic/me")
+async def cosmic_me(user: dict = Depends(get_current_user)):
+    return _build_cosmic_snapshot(user)
+
+class ShareCosmicReq(BaseModel):
+    board_slug: Optional[str] = None
+    note: Optional[str] = Field(default=None, max_length=500)
+
+@app.post("/api/cosmic/share")
+async def cosmic_share(body: ShareCosmicReq, user: dict = Depends(get_current_user)):
+    if body.board_slug:
+        board = await db.boards.find_one({"slug": body.board_slug})
+        if not board:
+            raise HTTPException(404, "Board not found")
+    snap = _build_cosmic_snapshot(user)
+    n = snap["now"]
+    nat = snap.get("natal")
+    if nat:
+        title = f"🌙 {user['username']}'s Cosmic Card — {nat['sun_symbol']} {nat['sun_sign']} · {nat['moon_symbol']} {nat['moon_sign']}"
+    else:
+        title = f"🌙 {user['username']}'s Cosmic Card — {n['moon_symbol']} Moon in {n['moon_sign']}"
+    content_lines = [
+        f"{n['phase_emoji']} {n['phase_name']} · {n['illum_pct']}% lit · day {n['age_days']} of cycle",
+        f"Moon in {n['moon_symbol']} {n['moon_sign']} — {n['moon_vibe']}",
+    ]
+    if nat:
+        content_lines.append(f"✨ {nat['aspect']}: {nat['guidance']}")
+        content_lines.append(f"🌕 Full moons lived: {nat['total_full_moons_lived']}")
+    if body.note:
+        content_lines.append("")
+        content_lines.append(body.note.strip())
+    content = "\n".join(content_lines)
+    doc = {
+        "title": title,
+        "content": content,
+        "board_slug": body.board_slug,
+        "author_id": user["_id"],
+        "reactions": {},
+        "kind": "cosmic_card",
+        "cosmic_data": snap,
+        "created_at": now_utc(),
+    }
+    res = await db.posts.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return await hydrate_post(doc, user)
 
 # -------------------------- HEALTH --------------------------
 @app.get("/api/health")

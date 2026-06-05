@@ -4,7 +4,7 @@ const API = (process.env.REACT_APP_BACKEND_URL || '') + '/api';
 
 export const api = axios.create({
   baseURL: API,
-  withCredentials: true,
+  withCredentials: false,
 });
 
 api.interceptors.request.use((cfg) => {
