@@ -3,6 +3,7 @@ import { api } from '../lib/api';
 import PostCard from '../components/PostCard';
 import ComposePost from '../components/ComposePost';
 import ShareCosmicModal from '../components/ShareCosmicModal';
+import LunarBrief from '../components/LunarBrief';
 import { useAuth } from '../lib/auth';
 import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
@@ -39,6 +40,8 @@ export default function Feed() {
         </div>
         <Link to="/boards" className="ghost-button hidden sm:inline-block" data-testid="feed-to-boards">All boards →</Link>
       </div>
+
+      {user && <LunarBrief />}
 
       {user ? (
         <div className="mb-6 space-y-3">

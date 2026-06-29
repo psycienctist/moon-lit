@@ -12,6 +12,8 @@ import PostDetail from './pages/PostDetail';
 import Chat from './pages/Chat';
 import Profile from './pages/Profile';
 import Settings from './pages/Settings';
+import Trades from './pages/Trades';
+import Collection from './pages/Collection';
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -35,6 +37,9 @@ function Shell() {
           <Route path="/post/:id" element={<PostDetail />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/u/:username" element={<Profile />} />
+          <Route path="/u/:username/collection" element={<Collection />} />
+          <Route path="/collection" element={<Protected><Collection /></Protected>} />
+          <Route path="/trades" element={<Protected><Trades /></Protected>} />
           <Route path="/settings" element={<Protected><Settings /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

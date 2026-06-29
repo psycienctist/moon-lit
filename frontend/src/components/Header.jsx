@@ -18,9 +18,15 @@ export default function Header() {
           <span className="hidden sm:inline label-mono text-cosmos-mist ml-1">COMMUNITY</span>
         </Link>
         <nav className="flex items-center gap-1 sm:gap-3">
-          <Link to="/feed" className="ghost-button hidden sm:inline-block" data-testid="nav-feed">Feed</Link>
-          <Link to="/boards" className="ghost-button hidden sm:inline-block" data-testid="nav-boards">Boards</Link>
-          <Link to="/chat" className="ghost-button hidden sm:inline-block" data-testid="nav-chat">Chatroom</Link>
+          <Link to="/feed" className="ghost-button hidden md:inline-block" data-testid="nav-feed">Feed</Link>
+          <Link to="/boards" className="ghost-button hidden md:inline-block" data-testid="nav-boards">Boards</Link>
+          <Link to="/chat" className="ghost-button hidden md:inline-block" data-testid="nav-chat">Chatroom</Link>
+          {user && (
+            <>
+              <Link to="/trades" className="ghost-button hidden lg:inline-block" data-testid="nav-trades">Trades</Link>
+              <Link to="/collection" className="ghost-button hidden lg:inline-block" data-testid="nav-collection">Deck</Link>
+            </>
+          )}
           {user ? (
             <div className="relative">
               <button
@@ -40,6 +46,20 @@ export default function Header() {
                     data-testid="menu-profile"
                   >
                     My Profile
+                  </Link>
+                  <Link
+                    to="/collection"
+                    onClick={() => setOpen(false)}
+                    className="block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow lg:hidden"
+                  >
+                    My Deck
+                  </Link>
+                  <Link
+                    to="/trades"
+                    onClick={() => setOpen(false)}
+                    className="block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow lg:hidden"
+                  >
+                    Trades
                   </Link>
                   <Link
                     to="/settings"

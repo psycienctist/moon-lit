@@ -1,5 +1,29 @@
 import React from 'react';
 
+const RARITY_COLORS = {
+  Common: 'border-cosmos-mist/40 text-cosmos-mist bg-white/5',
+  Uncommon: 'border-cosmos-blue/50 text-cosmos-blue bg-cosmos-blue/10',
+  Rare: 'border-cosmos-purple/60 text-cosmos-purple bg-cosmos-purple/15',
+  Legendary: 'border-cosmos-gold/70 text-cosmos-gold bg-cosmos-gold/15',
+};
+
+function RarityBadge({ tier, score, labels }) {
+  const cls = RARITY_COLORS[tier] || RARITY_COLORS.Common;
+  return (
+    <div
+      className={`label-mono px-2 py-0.5 rounded-full border text-[0.6rem] ${cls}`}
+      title={labels && labels.length ? labels.join(' · ') : `${tier} (score ${score})`}
+      data-testid={`rarity-badge-${tier}`}
+    >
+      {tier === 'Legendary' && '★ '}
+      {tier === 'Rare' && '◆ '}
+      {tier === 'Uncommon' && '▲ '}
+      {tier === 'Common' && '· '}
+      {tier}
+    </div>
+  );
+}
+
 // Renders the special cosmic_card post (or a live preview of /api/cosmic/me)
 export default function CosmicCard({ data, compact = false }) {
   if (!data) return null;
@@ -28,10 +52,15 @@ export default function CosmicCard({ data, compact = false }) {
       data-testid="cosmic-card"
     >
       <div className="px-5 pt-5">
-        <div className="flex items-center gap-2">
-          <span className="label-mono text-cosmos-purple">Cosmic Card</span>
-          {natal && (
-            <span className="text-xs text-cosmos-mist">· born {natal.birth_date}</span>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="label-mono text-cosmos-purple">Cosmic Card</span>
+            {natal && (
+              <span className="text-xs text-cosmos-mist">· born {natal.birth_date}</span>
+            )}
+          </div>
+          {data.rarity && (
+            <RarityBadge tier={data.rarity.tier} score={data.rarity.score} labels={data.rarity.labels} />
           )}
         </div>
 

@@ -167,6 +167,8 @@ async def startup():
     await db.posts.create_index("board_slug")
     await db.comments.create_index([("post_id", 1), ("created_at", 1)])
     await db.chat_messages.create_index([("created_at", -1)])
+    await db.card_trades.create_index([("sender_id", 1), ("status", 1)])
+    await db.card_trades.create_index([("receiver_id", 1), ("status", 1)])
 
     # Seed boards
     default_boards = [
@@ -325,12 +327,45 @@ async def update_me(body: UpdateProfileReq, user: dict = Depends(get_current_use
     return serialize_user(fresh)
 
 @app.get("/api/users/{username}")
-async def get_user(username: str):
+async def get_user(username: str, request: Request):
     u = await db.users.find_one({"username": username})
     if not u:
         raise HTTPException(404, "Not found")
     s = serialize_user(u)
     s.pop("email", None)
+    # Add natal chart + rarity + counts
+    snap = _build_cosmic_snapshot(u)
+    s["natal"] = snap.get("natal")
+    s["rarity"] = snap.get("rarity")
+    s["card_count"] = await db.card_trades.count_documents({
+        "status": "accepted",
+        "$or": [{"sender_id": u["_id"]}, {"receiver_id": u["_id"]}],
+    })
+    # Twin Moon vs. viewer (if logged in)
+    viewer_twin = None
+    try:
+        viewer = await get_current_user(request)
+        if viewer["_id"] != u["_id"]:
+            v_snap = _build_cosmic_snapshot(viewer)
+            viewer_twin = _twin_moon(v_snap.get("natal"), snap.get("natal"))
+            s["is_friend"] = await _are_friends(viewer["_id"], u["_id"])
+            # Existing trade state
+            pending_out = await db.card_trades.find_one({
+                "sender_id": viewer["_id"], "receiver_id": u["_id"], "status": "pending",
+            })
+            pending_in = await db.card_trades.find_one({
+                "sender_id": u["_id"], "receiver_id": viewer["_id"], "status": "pending",
+            })
+            s["trade_state"] = (
+                "outgoing_pending" if pending_out else
+                "incoming_pending" if pending_in else
+                "friend" if s["is_friend"] else
+                "none"
+            )
+            s["incoming_trade_id"] = str(pending_in["_id"]) if pending_in else None
+    except Exception:
+        pass
+    s["twin_with_viewer"] = viewer_twin
     return s
 
 @app.post("/api/users/{username}/block")
@@ -765,6 +800,38 @@ def _aspect(natal_moon_lon: float, current_moon_lon: float):
         return "Trine", "Harmony! Today's cosmic tide flows perfectly with you."
     return "Cycle", "Steady growth. Build on the intentions you set recently."
 
+def _compute_rarity(natal: dict) -> dict:
+    """Determine rarity of a cosmic card from the natal chart."""
+    if not natal:
+        return {"tier": "Common", "score": 1, "labels": []}
+    score = 0
+    labels = []
+    phase = natal.get("birth_phase_name", "")
+    if phase in ("Full Moon", "New Moon"):
+        score += 3
+        labels.append(f"Born on a {phase}")
+    elif phase in ("First Quarter", "Last Quarter"):
+        score += 1
+        labels.append(f"Born on the {phase}")
+    # Sun-Moon conjunction (same sign)
+    if natal.get("sun_sign") == natal.get("moon_sign"):
+        score += 3
+        labels.append(f"Sun-Moon conjunction in {natal['sun_sign']}")
+    # Rare sign combos (mystical / cosmic-minded)
+    rare_signs = {"Pisces", "Scorpio", "Aquarius"}
+    if natal.get("moon_sign") in rare_signs and natal.get("sun_sign") in rare_signs:
+        score += 2
+        labels.append("Mystic alignment")
+    if score >= 5:
+        tier = "Legendary"
+    elif score >= 3:
+        tier = "Rare"
+    elif score >= 1:
+        tier = "Uncommon"
+    else:
+        tier = "Common"
+    return {"tier": tier, "score": score, "labels": labels}
+
 def _build_cosmic_snapshot(user: dict) -> dict:
     now_dt = now_utc()
     current = _chart(now_dt)
@@ -801,6 +868,7 @@ def _build_cosmic_snapshot(user: dict) -> dict:
                 "aspect": aspect,
                 "guidance": guidance,
             }
+            snapshot["rarity"] = _compute_rarity(snapshot["natal"])
         except Exception:
             pass
     return snapshot
@@ -850,6 +918,294 @@ async def cosmic_share(body: ShareCosmicReq, user: dict = Depends(get_current_us
     res = await db.posts.insert_one(doc)
     doc["_id"] = res.inserted_id
     return await hydrate_post(doc, user)
+
+# -------------------------- CARD TRADING / FRIENDS / LUNAR BRIEF --------------------------
+class TradeRequestReq(BaseModel):
+    username: str  # recipient
+    message: Optional[str] = Field(default=None, max_length=300)
+
+async def _user_by_id(oid):
+    return await db.users.find_one({"_id": oid})
+
+def _user_brief(u: dict) -> dict:
+    if not u:
+        return {"id": None, "username": "[deleted]", "avatar_url": None}
+    return {
+        "id": str(u["_id"]),
+        "username": u["username"],
+        "avatar_url": u.get("avatar_url"),
+    }
+
+async def _are_friends(a_id, b_id) -> bool:
+    f = await db.card_trades.find_one({
+        "status": "accepted",
+        "$or": [
+            {"sender_id": a_id, "receiver_id": b_id},
+            {"sender_id": b_id, "receiver_id": a_id},
+        ]
+    })
+    return f is not None
+
+def _twin_moon(a_natal: Optional[dict], b_natal: Optional[dict]) -> Optional[str]:
+    if not a_natal or not b_natal:
+        return None
+    sun_match = a_natal.get("sun_sign") == b_natal.get("sun_sign")
+    moon_match = a_natal.get("moon_sign") == b_natal.get("moon_sign")
+    if sun_match and moon_match:
+        return "Twin Soul"  # both signs
+    if moon_match:
+        return "Twin Moon"
+    if sun_match:
+        return "Twin Sun"
+    return None
+
+@app.post("/api/trades")
+async def create_trade(body: TradeRequestReq, user: dict = Depends(get_current_user)):
+    recipient = await db.users.find_one({"username": body.username})
+    if not recipient:
+        raise HTTPException(404, "User not found")
+    if recipient["_id"] == user["_id"]:
+        raise HTTPException(400, "Cannot send a card to yourself")
+    # Prevent duplicate pending requests
+    existing = await db.card_trades.find_one({
+        "sender_id": user["_id"],
+        "receiver_id": recipient["_id"],
+        "status": "pending",
+    })
+    if existing:
+        raise HTTPException(409, "You already have a pending trade with this user")
+    # Block check (recipient blocked the sender)
+    if user["_id"] in (recipient.get("blocked_users") or []):
+        raise HTTPException(403, "This cosmonaut isn't accepting trades from you")
+    sender_card = _build_cosmic_snapshot(user)
+    doc = {
+        "sender_id": user["_id"],
+        "receiver_id": recipient["_id"],
+        "sender_card": sender_card,
+        "receiver_card": None,
+        "message": (body.message or "").strip() or None,
+        "status": "pending",
+        "created_at": now_utc(),
+        "resolved_at": None,
+    }
+    res = await db.card_trades.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return {
+        "id": str(doc["_id"]),
+        "status": "pending",
+        "to": _user_brief(recipient),
+        "from": _user_brief(user),
+    }
+
+async def _hydrate_trade(t: dict, viewer_id) -> dict:
+    sender = await _user_by_id(t["sender_id"])
+    receiver = await _user_by_id(t["receiver_id"])
+    perspective = "received" if t["receiver_id"] == viewer_id else "sent"
+    return {
+        "id": str(t["_id"]),
+        "status": t["status"],
+        "message": t.get("message"),
+        "from": _user_brief(sender),
+        "to": _user_brief(receiver),
+        "sender_card": t.get("sender_card"),
+        "receiver_card": t.get("receiver_card"),
+        "perspective": perspective,
+        "created_at": t["created_at"].isoformat(),
+        "resolved_at": t["resolved_at"].isoformat() if t.get("resolved_at") else None,
+    }
+
+@app.get("/api/trades")
+async def list_trades(status: Optional[str] = None, direction: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q: dict = {"$or": [{"sender_id": user["_id"]}, {"receiver_id": user["_id"]}]}
+    if status:
+        q["status"] = status
+    if direction == "incoming":
+        q = {"receiver_id": user["_id"], **({"status": status} if status else {})}
+    elif direction == "outgoing":
+        q = {"sender_id": user["_id"], **({"status": status} if status else {})}
+    cursor = db.card_trades.find(q).sort("created_at", -1).limit(100)
+    out = []
+    async for t in cursor:
+        out.append(await _hydrate_trade(t, user["_id"]))
+    return out
+
+@app.post("/api/trades/{trade_id}/accept")
+async def accept_trade(trade_id: str, user: dict = Depends(get_current_user)):
+    try:
+        oid = ObjectId(trade_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    t = await db.card_trades.find_one({"_id": oid})
+    if not t:
+        raise HTTPException(404, "Not found")
+    if t["receiver_id"] != user["_id"]:
+        raise HTTPException(403, "Only the receiver can accept")
+    if t["status"] != "pending":
+        raise HTTPException(409, f"Trade is {t['status']}")
+    # Build receiver's card snapshot at acceptance time so sender's collection gets it
+    receiver_card = _build_cosmic_snapshot(user)
+    await db.card_trades.update_one(
+        {"_id": oid},
+        {"$set": {"status": "accepted", "receiver_card": receiver_card, "resolved_at": now_utc()}}
+    )
+    t["status"] = "accepted"
+    t["receiver_card"] = receiver_card
+    t["resolved_at"] = now_utc()
+    return await _hydrate_trade(t, user["_id"])
+
+@app.post("/api/trades/{trade_id}/decline")
+async def decline_trade(trade_id: str, user: dict = Depends(get_current_user)):
+    try:
+        oid = ObjectId(trade_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    t = await db.card_trades.find_one({"_id": oid})
+    if not t:
+        raise HTTPException(404, "Not found")
+    if t["receiver_id"] != user["_id"]:
+        raise HTTPException(403, "Only the receiver can decline")
+    if t["status"] != "pending":
+        raise HTTPException(409, f"Trade is {t['status']}")
+    await db.card_trades.update_one(
+        {"_id": oid},
+        {"$set": {"status": "declined", "resolved_at": now_utc()}}
+    )
+    t["status"] = "declined"
+    return await _hydrate_trade(t, user["_id"])
+
+@app.delete("/api/trades/{trade_id}")
+async def cancel_trade(trade_id: str, user: dict = Depends(get_current_user)):
+    try:
+        oid = ObjectId(trade_id)
+    except Exception:
+        raise HTTPException(404, "Not found")
+    t = await db.card_trades.find_one({"_id": oid})
+    if not t:
+        raise HTTPException(404, "Not found")
+    if t["sender_id"] != user["_id"]:
+        raise HTTPException(403, "Only the sender can cancel")
+    if t["status"] != "pending":
+        raise HTTPException(409, f"Trade is {t['status']}")
+    await db.card_trades.delete_one({"_id": oid})
+    return {"ok": True}
+
+@app.get("/api/collection")
+async def my_collection(username: Optional[str] = None, user: dict = Depends(get_current_user)):
+    target = user
+    if username and username != user["username"]:
+        target = await db.users.find_one({"username": username})
+        if not target:
+            raise HTTPException(404, "User not found")
+    tid = target["_id"]
+    cursor = db.card_trades.find({
+        "status": "accepted",
+        "$or": [{"sender_id": tid}, {"receiver_id": tid}],
+    }).sort("resolved_at", -1)
+    cards = []
+    async for t in cursor:
+        # The "card" the target owns is the OTHER party's card.
+        if t["sender_id"] == tid:
+            other = await _user_by_id(t["receiver_id"])
+            card = t.get("receiver_card")
+        else:
+            other = await _user_by_id(t["sender_id"])
+            card = t.get("sender_card")
+        if not card:
+            continue
+        cards.append({
+            "trade_id": str(t["_id"]),
+            "from": _user_brief(other),
+            "card": card,
+            "acquired_at": t["resolved_at"].isoformat() if t.get("resolved_at") else None,
+        })
+    return cards
+
+@app.get("/api/friends")
+async def my_friends(username: Optional[str] = None, user: dict = Depends(get_current_user)):
+    target = user
+    if username and username != user["username"]:
+        target = await db.users.find_one({"username": username})
+        if not target:
+            raise HTTPException(404, "User not found")
+    tid = target["_id"]
+    cursor = db.card_trades.find({
+        "status": "accepted",
+        "$or": [{"sender_id": tid}, {"receiver_id": tid}],
+    })
+    friend_ids = set()
+    friends = []
+    async for t in cursor:
+        fid = t["receiver_id"] if t["sender_id"] == tid else t["sender_id"]
+        if fid in friend_ids:
+            continue
+        friend_ids.add(fid)
+        u = await _user_by_id(fid)
+        if u:
+            friends.append({
+                **_user_brief(u),
+                "since": (t.get("resolved_at") or t["created_at"]).isoformat(),
+            })
+    return friends
+
+@app.get("/api/lunar-brief")
+async def lunar_brief(user: dict = Depends(get_current_user)):
+    my_snap = _build_cosmic_snapshot(user)
+    my_natal = my_snap.get("natal")
+    if not my_natal:
+        return {"twin_moons": [], "kindred_cards": [], "current": my_snap["now"], "needs_birthdate": True}
+    moon_sign = my_natal["moon_sign"]
+    sun_sign = my_natal["sun_sign"]
+    # Twin Moons: users sharing same moon sign (and bonus if also sun)
+    twin_moons = []
+    others = db.users.find({
+        "_id": {"$ne": user["_id"]},
+        "birth_date": {"$ne": None, "$exists": True},
+    }).limit(200)
+    candidates: List[tuple] = []
+    async for u in others:
+        try:
+            bd_dt = datetime.combine(date.fromisoformat(u["birth_date"]), datetime.min.time()).replace(tzinfo=timezone.utc)
+            ch = _chart(bd_dt)
+            their_natal = {"sun_sign": ch["sun_sign"], "moon_sign": ch["moon_sign"]}
+            twin = _twin_moon(my_natal, their_natal)
+            if twin:
+                candidates.append((twin, u, ch))
+        except Exception:
+            continue
+    # Sort: Twin Soul > Twin Moon > Twin Sun
+    order = {"Twin Soul": 0, "Twin Moon": 1, "Twin Sun": 2}
+    candidates.sort(key=lambda x: order.get(x[0], 9))
+    for twin, u, ch in candidates[:10]:
+        twin_moons.append({
+            **_user_brief(u),
+            "twin_kind": twin,
+            "sun_sign": ch["sun_sign"],
+            "sun_symbol": ch["sun_symbol"],
+            "moon_sign": ch["moon_sign"],
+            "moon_symbol": ch["moon_symbol"],
+            "birth_date": u["birth_date"],
+        })
+    # Kindred cards: top recent cosmic_card posts whose author shares moon sign with viewer
+    kindred = []
+    cursor = db.posts.find({"kind": "cosmic_card"}).sort("created_at", -1).limit(50)
+    async for p in cursor:
+        cdat = (p.get("cosmic_data") or {}).get("natal")
+        if not cdat:
+            continue
+        if cdat.get("moon_sign") != moon_sign and cdat.get("sun_sign") != sun_sign:
+            continue
+        if p["author_id"] == user["_id"]:
+            continue
+        kindred.append(await hydrate_post(p, user))
+        if len(kindred) >= 3:
+            break
+    return {
+        "current": my_snap["now"],
+        "my_natal": my_natal,
+        "twin_moons": twin_moons,
+        "kindred_cards": kindred,
+        "needs_birthdate": False,
+    }
 
 # -------------------------- HEALTH --------------------------
 @app.get("/api/health")
