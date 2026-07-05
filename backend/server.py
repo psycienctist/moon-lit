@@ -807,9 +807,15 @@ def _compute_rarity(natal: dict) -> dict:
     score = 0
     labels = []
     phase = natal.get("birth_phase_name", "")
-    if phase in ("Full Moon", "New Moon"):
+    # Also treat close-to-Full/New births as Full/New for rarity purposes
+    # since we sample at noon UTC and the peak can be up to ~12h off.
+    phase_frac = natal.get("_phase_frac") if isinstance(natal, dict) else None
+    close_to_full = phase_frac is not None and 0.45 <= phase_frac <= 0.55
+    close_to_new = phase_frac is not None and (phase_frac <= 0.05 or phase_frac >= 0.95)
+    if phase in ("Full Moon", "New Moon") or close_to_full or close_to_new:
         score += 3
-        labels.append(f"Born on a {phase}")
+        pretty = "Full Moon" if (phase == "Full Moon" or close_to_full) else "New Moon"
+        labels.append(f"Born on a {pretty}")
     elif phase in ("First Quarter", "Last Quarter"):
         score += 1
         labels.append(f"Born on the {phase}")
@@ -852,7 +858,10 @@ def _build_cosmic_snapshot(user: dict) -> dict:
     bd = user.get("birth_date")
     if bd:
         try:
-            bd_dt = datetime.combine(date.fromisoformat(bd), datetime.min.time()).replace(tzinfo=timezone.utc)
+            # Sample at 12:00 UTC (noon) — a date-only input should center the
+            # sample within the day so we catch the true moon phase whether it
+            # peaks in the morning or evening UTC.
+            bd_dt = datetime.combine(date.fromisoformat(bd), datetime.min.time()).replace(tzinfo=timezone.utc) + timedelta(hours=12)
             natal = _chart(bd_dt)
             aspect, guidance = _aspect(natal["moon_lon"], current["moon_lon"])
             total_moons = (now_dt - bd_dt).days / 29.53
