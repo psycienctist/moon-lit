@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import Avatar from './Avatar';
@@ -8,6 +8,27 @@ export default function Header() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const go = (path) => {
+    setOpen(false);
+    nav(path);
+  };
+
+  const doLogout = async () => {
+    setOpen(false);
+    await logout();
+    nav('/login');
+  };
 
   return (
     <header className="border-b border-cosmos-violet/20 bg-cosmos-void/70 backdrop-blur-xl sticky top-0 z-40">
@@ -28,8 +49,9 @@ export default function Header() {
             </>
           )}
           {user ? (
-            <div className="relative">
+            <div className="relative" ref={menuRef}>
               <button
+                type="button"
                 className="flex items-center gap-2 rounded-full px-1.5 py-1 hover:bg-cosmos-violet/20 transition"
                 onClick={() => setOpen((o) => !o)}
                 data-testid="user-menu-button"
@@ -38,39 +60,43 @@ export default function Header() {
                 <span className="hidden sm:inline text-sm text-cosmos-glow font-medium">{user.username}</span>
               </button>
               {open && (
-                <div className="absolute right-0 mt-2 w-44 cosmic-card p-2 shadow-glow z-50">
-                  <Link
-                    to={`/u/${user.username}`}
-                    onClick={() => setOpen(false)}
-                    className="block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
+                <div className="absolute right-0 mt-2 w-48 cosmic-card p-2 shadow-glow z-50" data-testid="user-menu-dropdown">
+                  <button
+                    type="button"
+                    onClick={() => go(`/u/${user.username}`)}
+                    className="w-full text-left block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
                     data-testid="menu-profile"
                   >
                     My Profile
-                  </Link>
-                  <Link
-                    to="/collection"
-                    onClick={() => setOpen(false)}
-                    className="block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow lg:hidden"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => go('/collection')}
+                    className="w-full text-left block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
+                    data-testid="menu-deck"
                   >
                     My Deck
-                  </Link>
-                  <Link
-                    to="/trades"
-                    onClick={() => setOpen(false)}
-                    className="block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow lg:hidden"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => go('/trades')}
+                    className="w-full text-left block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
+                    data-testid="menu-trades"
                   >
                     Trades
-                  </Link>
-                  <Link
-                    to="/settings"
-                    onClick={() => setOpen(false)}
-                    className="block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => go('/settings')}
+                    className="w-full text-left block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
                     data-testid="menu-settings"
                   >
                     Edit Profile
-                  </Link>
+                  </button>
+                  <div className="my-1 border-t border-cosmos-line" />
                   <button
-                    onClick={async () => { setOpen(false); await logout(); nav('/login'); }}
+                    type="button"
+                    onClick={doLogout}
                     className="w-full text-left px-3 py-2 text-sm rounded hover:bg-cosmos-ember/20 text-cosmos-ember flex items-center gap-2"
                     data-testid="menu-logout"
                   >
