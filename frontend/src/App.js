@@ -14,6 +14,7 @@ import Profile from './pages/Profile';
 import Settings from './pages/Settings';
 import Trades from './pages/Trades';
 import Collection from './pages/Collection';
+import Journal from './pages/Journal';
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -32,6 +33,7 @@ function Shell() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/feed" element={<Feed />} />
+          <Route path="/journal" element={<Protected><Journal /></Protected>} />
           <Route path="/boards" element={<Boards />} />
           <Route path="/boards/:slug" element={<BoardView />} />
           <Route path="/post/:id" element={<PostDetail />} />
