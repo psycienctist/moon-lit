@@ -107,4 +107,8 @@ body::before {
 }
 
 .relative { position: relative; }
-#root > * { position: relative; z-index: 2; }
+/* Keep <main> and <footer> above the fixed grain overlay, but do NOT touch
+   the header — it uses sticky + a high z-index so overlays like the user
+   menu dropdown can escape above later siblings. */
+#root > main, #root > footer { position: relative; z-index: 2; }
+#root > header { z-index: 50; }
