@@ -79,6 +79,14 @@ export default function Header() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => go('/journal')}
+                    className="w-full text-left block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
+                    data-testid="menu-journal"
+                  >
+                    My Journal
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => go('/trades')}
                     className="w-full text-left block px-3 py-2 text-sm rounded hover:bg-cosmos-violet/20 text-cosmos-glow"
                     data-testid="menu-trades"
