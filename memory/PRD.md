@@ -57,6 +57,19 @@
 - ✅ Birth date editable in Settings (unlocks natal half of the card)
 - ✅ Auth model switched to Bearer-token-in-localStorage (platform edge proxy injects `ACAO: *` which precludes credentialed cookies cross-origin)
 
+## Implemented (2026-06-05) — Trading Card system, Twin Moons, Lunar Brief
+- ✅ Rarity tiers (Common/Uncommon/Rare/Legendary) on every Cosmic Card, computed from natal chart (Full/New Moon births, Sun-Moon conjunctions, mystic sign combos). Natal chart now samples at 12:00 UTC to reliably catch full/new moon calendar dates.
+- ✅ Twin Moon / Twin Sun / Twin Soul detection between any two users, shown as a badge on the profile
+- ✅ Card trading: "Send my card" on any profile → recipient sees an Inbox item with the sender's card → Accept trades both snapshots into each user's Collection AND makes them Cosmic Friends. Decline / Cancel supported. Blocks respected.
+- ✅ New pages: `/trades` (Incoming/Outgoing tabs), `/collection` (deck grid), `/u/:username/collection` (view others' decks)
+- ✅ New backend endpoints: POST/GET `/api/trades`, POST `/api/trades/{id}/accept|decline`, DELETE `/api/trades/{id}`, GET `/api/collection`, GET `/api/friends`, GET `/api/lunar-brief`
+- ✅ Profile now shows: rarity, natal summary, Twin badge vs viewer, cards count, friends count + list, contextual action button by trade_state (`none | outgoing_pending | incoming_pending | friend`)
+- ✅ Lunar Brief widget on Feed: Cosmic Kindred (avatars ranked Twin Soul > Twin Moon > Twin Sun) + top cosmic-card posts from same-sign authors
+- ✅ Header navigation extended with Trades + Deck links, plus user-menu dropdown with My Profile / My Deck / Trades / Edit Profile / Log out
+
+## Bug fixes (2026-06-05)
+- ✅ Header dropdown menu items were unclickable — CSS `#root > * { z-index: 2 }` was giving `<main>` an equal stacking context that painted on top of the header. Scoped the rule to only `main`/`footer` and gave `header` `z-index: 50`. Verified 100% by testing agent (iteration 4).
+
 ## Test results
 - Backend: 22/24 → 24/24 after HIGH priority brute-force fix
 - Frontend: 100% of tested flows passing (registration → feed compose → reactions → comments → boards → live chat with presence)
